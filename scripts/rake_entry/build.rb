@@ -21,16 +21,7 @@ module RakeEntry
     end
 
     def declare
-      desc('test')
-      task('test') do
-        puts cmsis_gcc_support.inspect
-      end
-
       boot_object_path = ::File.join(@cache_dir, '_boot.o')
-
-      desc('test2')
-      task('test2': [boot_object_path])
-
       application_elf = ::File.join(@build_dir, 'application.elf')
       application_map_file = ::File.join(@build_dir, 'application.map')
       application_ar = ::File.join(@cache_dir, 'libapplication.a')
