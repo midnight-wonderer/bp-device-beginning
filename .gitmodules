@@ -1,3 +1,6 @@
 [submodule "vendor/cmsis-f1"]
 	path = vendor/cmsis-f1
 	url = https://github.com/STMicroelectronics/cmsis_device_f1.git
+[submodule "vendor/cmsis-core"]
+	path = vendor/cmsis-core
+	url = https://github.com/STMicroelectronics/cmsis_core.git

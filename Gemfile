@@ -4,3 +4,7 @@ source 'https://rubygems.org'
 
 gem 'rake'
 gem 'zeitwerk'
+
+group :development do
+  gem 'rubocop'
+end
