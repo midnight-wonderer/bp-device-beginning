@@ -8,12 +8,16 @@ module RakeEntry
       context,
       build_dir: nil,
       cache_dir: nil,
-      boot_source: nil
+      c_defs: %w[STM32F103x6],
+      boot_source: 'startup_stm32f103x6.s',
+      linker_script: 'STM32F103X6_FLASH.ld'
     )
       @context = context
       @build_dir = build_dir || 'build'
       @cache_dir = cache_dir || ::File.join(@build_dir, 'cache')
-      @boot_source = boot_source || 'startup_stm32f103x6.s'
+      @boot_source = boot_source
+      @c_defs = c_defs
+      @linker = linker_script
     end
 
     def declare
@@ -27,7 +31,26 @@ module RakeEntry
       desc('test2')
       task('test2': [boot_object_path])
 
-      file(::File.join(@build_dir, 'application.elf')) do |t|
+      application_elf = ::File.join(@build_dir, 'application.elf')
+      application_map_file = ::File.join(@build_dir, 'application.map')
+      application_ar = ::File.join(@cache_dir, 'libapplication.a')
+
+      file(application_elf => [boot_object_path, application_ar, ::File.join(cmsis_gcc_support, 'linker', @linker)]) do |t|
+        boot, ar, ld = t.prerequisites
+        lib_dir, lib_file = ::File.split(ar)
+        lib_name = /\Alib(\w+)\.a\z/.match(lib_file).then do |matched|
+          matched[1]
+        end
+        [
+          "arm-none-eabi-gcc #{boot} -mcpu=cortex-m3 -mthumb -specs=nano.specs",
+          "-T#{ld} -L#{lib_dir} -lc -lm -lnosys -Wl,--gc-sections",
+          "-Wl,-Map=#{application_map_file},--cref",
+          "-l#{lib_name}",
+          "-o #{t.name}",
+        ].join(' ').tap do |command|
+          sh command
+        end
+        sh "arm-none-eabi-size #{t.name}"
       end
 
       file(boot_object_path => [::File.join(cmsis_gcc_support, @boot_source)]) do |t|
@@ -35,7 +58,7 @@ module RakeEntry
         sh "arm-none-eabi-as #{t.source} -o #{t.name}"
       end
 
-      ::Dir['src/**/*.c'].map do |source_path|
+      application_map = ::Dir['src/**/*.c'].map do |source_path|
         source_dir, source_name = ::File.split(source_path)
         target_dir = source_dir.sub(%r[\Asrc(?:/|\z)], '').then do |remaining|
           ::File.join(@cache_dir, remaining)
@@ -44,19 +67,26 @@ module RakeEntry
         target_path = ::File.join(target_dir, target_name)
         list_name = source_name.sub(/\.c\z/, '.lst')
         list_path = ::File.join(target_dir, list_name)
-        d_name =  source_name.sub(/\.c\z/, '.d')
+        d_name = source_name.sub(/\.c\z/, '.d')
         d_path = ::File.join(target_dir, d_name)
+        { source_path: source_path, target_path: target_path, list_path: list_path, d_path: d_path }
+      end
+
+      application_map.each do |entry|
+        source_path, target_path, list_path, d_path = entry.values_at(:source_path, :target_path, :list_path, :d_path)
         file(target_path => [source_path]) do |t|
           ::FileUtils.mkdir_p(::File.dirname(t.name))
           sh "arm-none-eabi-gcc -c #{cflags} -MMD -MP -MF\"#{d_path}\" -Wa,-a,-ad,-alms=#{list_path} #{t.source} -o #{t.name}"
         end
       end
 
-      # $(CACHE_DIR)/$(BOOT_OBJECT): $(BOOT_SOURCE) | $(CACHE_DIR)
-      # $(AS) $(ASFLAGS) $< -o $@
-
-      file('a.txt') do |t|
-        sh "touch #{t.name}"
+      application_map.map do |entry|
+        entry[:target_path]
+      end.tap do |application_objects|
+        file(application_ar => application_objects) do |t|
+          ::FileUtils.mkdir_p(::File.dirname(t.name))
+          sh "arm-none-eabi-ar rcs #{t.name} #{t.prerequisites.join(' ')}"
+        end
       end
     end
 
@@ -67,21 +97,23 @@ module RakeEntry
     end
 
     def cflags
-      @cflags ||= "-mcpu=cortex-m3 -mthumb -DSTM32F103x6 #{include_paths.map do |p|
-        "-I#{p}"
-      end.join(' ')} -O2 -Wall -fdata-sections -ffunction-sections"
+      @cflags ||= begin
+        def_flags = @c_defs.map do |d|
+          "-D#{d}"
+        end.join(' ')
+        include_options = include_paths.map do |p|
+          "-I#{p}"
+        end.join(' ')
+        "-mcpu=cortex-m3 -mthumb #{def_flags} #{include_options} -O2 -Wall -fdata-sections -ffunction-sections"
+      end
     end
 
     def include_paths
       @include_paths ||= [
-        *::Dir['vendor/cmsis*/**/stm32f1xx.h'].map do |path|
-          ::File.dirname(path)
-        end,
-        *::Dir['vendor/cmsis*/**/Core/**/cmsis_gcc.h'].map do |path|
-          ::File.dirname(path)
-        end,
-      ].tap do |path|
-        puts 'weett', path.inspect
+        *::Dir['vendor/cmsis*/**/Core/**/cmsis_gcc.h'],
+        *::Dir['vendor/cmsis*/**/stm32f1xx.h'],
+      ].map do |path|
+        ::File.dirname(path)
       end
     end
 
